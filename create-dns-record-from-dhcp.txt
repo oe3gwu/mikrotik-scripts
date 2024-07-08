@@ -1,0 +1,28 @@
+:local ttl 600s
+
+:local GetDomain do={
+    :local ipaddr [:toip $1]
+    /ip dhcp-server network
+    :foreach network in [find] do={
+        :local netblock [get value-name=address $network]
+        :if ($ipaddr in $netblock) do={
+            :return [get value-name=domain $network]
+        }
+    }
+}
+
+:local IsValidFQDN do={
+    :local string [:tostr $1]
+    :return ($string~"^(([a-zA-Z0-9][a-zA-Z0-9-]{0,61}){0,1}[a-zA-Z]\\.){1,9}[a-zA-Z][a-zA-Z0-9-]{0,28}[a-zA-Z]\$")
+}
+
+/ip dns static
+:if ($leaseBound = 1) do={
+    :local FQDN "$($"lease-hostname").$[$GetDomain $leaseActIP]"
+    :if ([$IsValidFQDN $FQDN]) do={
+        remove numbers=[find where name=$FQDN]
+        add name=$FQDN address=$leaseActIP ttl=$ttl
+    }
+} else={
+    remove numbers=[find where address=$leaseActIP ttl=$ttl]
+}
