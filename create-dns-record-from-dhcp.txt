@@ -1,28 +1,58 @@
 :local ttl 600s
 
+# Get the domain of the MOST SPECIFIC matching network that has a domain set
 :local GetDomain do={
     :local ipaddr [:toip $1]
+    :local bestDom ""
+    :local bestLen 0
     /ip dhcp-server network
-    :foreach network in [find] do={
-        :local netblock [get value-name=address $network]
-        :if ($ipaddr in $netblock) do={
-            :return [get value-name=domain $network]
+    :foreach n in=[find] do={
+        :local netblock [get $n value-name=address]
+        :local dom      [get $n value-name=domain]
+        :if ([:len $dom] > 0 && ($ipaddr in $netblock)) do={
+            :local slash [:find $netblock "/"]
+            :local plen  [:tonum [:pick $netblock ($slash+1) [:len $netblock]]]
+            :if ($plen > $bestLen) do={
+                :set bestLen $plen
+                :set bestDom $dom
+            }
         }
     }
-}
-
-:local IsValidFQDN do={
-    :local string [:tostr $1]
-    :return ($string~"^(([a-zA-Z0-9][a-zA-Z0-9-]{0,61}){0,1}[a-zA-Z]\\.){1,9}[a-zA-Z][a-zA-Z0-9-]{0,28}[a-zA-Z]\$")
+    :return $bestDom
 }
 
 /ip dns static
 :if ($leaseBound = 1) do={
-    :local FQDN "$($"lease-hostname").$[$GetDomain $leaseActIP]"
-    :if ([$IsValidFQDN $FQDN]) do={
-        remove numbers=[find where name=$FQDN]
-        add name=$FQDN address=$leaseActIP ttl=$ttl
+
+    # hostname from DHCP (fallback to fields in the lease if empty)
+    :local host $"lease-hostname"
+    :if ($host = "" or $host = "unknown") do={
+        :local lid [/ip dhcp-server lease find where address=$leaseActIP]
+        :if ([:len $lid] > 0) do={
+            :set host [/ip dhcp-server lease get $lid value-name=host-name]
+            :if ($host = "" or $host = "unknown") do={
+                :set host [/ip dhcp-server lease get $lid value-name=active-host-name]
+            }
+        }
     }
+    :if ($host = "" or $host = "unknown") do={ :return }
+
+    # domain from the matching network row (no hard-coded default)
+    :local dom [$GetDomain $leaseActIP]
+    :if ([:len $dom] = 0) do={ :return }
+
+    # Build FQDN; append domain only if it’s not already the suffix
+    :local FQDN $host
+    :local suffix ("." . $dom)
+    :local lF [:len $FQDN]
+    :local lS [:len $suffix]
+    :local tail ""
+    :if ($lF >= $lS) do={ :set tail [:pick $FQDN ($lF - $lS) $lF] }
+    :if ($tail != $suffix) do={ :set FQDN ($FQDN . $suffix) }
+
+    remove [find where name=$FQDN]
+    add name=$FQDN address=$leaseActIP ttl=$ttl
+
 } else={
-    remove numbers=[find where address=$leaseActIP ttl=$ttl]
+    remove [find where address=$leaseActIP and ttl=$ttl]
 }
